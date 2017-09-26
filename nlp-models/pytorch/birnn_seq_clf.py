@@ -4,7 +4,7 @@ import math
 
 
 class BiRNN(torch.nn.Module):
-    def __init__(self, vocab_size, n_out, embedding_dim=128, cell_size=128, dropout=0.0):
+    def __init__(self, vocab_size, n_out, embedding_dim=128, cell_size=128, dropout=0.2):
         super(BiRNN, self).__init__()
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
@@ -17,14 +17,11 @@ class BiRNN(torch.nn.Module):
 
     def build_model(self):
         self.encoder = torch.nn.Embedding(self.vocab_size, self.embedding_dim)
-        self.fw_lstm = torch.nn.LSTM(input_size=self.embedding_dim,
-                                     hidden_size=self.cell_size,
-                                     batch_first=True,
-                                     dropout=self.dropout)
-        self.bw_lstm = torch.nn.LSTM(input_size=self.embedding_dim,
-                                     hidden_size=self.cell_size,
-                                     batch_first=True,
-                                     dropout=self.dropout)
+        self.birnn = torch.nn.LSTM(input_size=self.embedding_dim,
+                                   hidden_size=self.cell_size,
+                                   batch_first=True,
+                                   dropout=self.dropout,
+                                   bidirectional=True)
         self.fc = torch.nn.Linear(2 * self.cell_size, self.n_out)
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = torch.optim.Adam(self.parameters())
@@ -32,21 +29,11 @@ class BiRNN(torch.nn.Module):
 
 
     def forward(self, X):
-        X_reversed = self.reverse(X, 1)
-        fw_out, _ = self.fw_lstm(self.encoder(X), None)
-        bw_out, _ = self.bw_lstm(self.encoder(X_reversed), None)
-        bi_rnn_out = torch.cat((fw_out, self.reverse(bw_out, 1)), 2)
-        reshaped = bi_rnn_out.view(-1, 2 * self.cell_size)
+        birnn_out, _ = self.birnn(self.encoder(X), None)
+        reshaped = birnn_out.contiguous().view(-1, 2*self.cell_size)
         logits = self.fc(reshaped)                  
         return logits
     # end method forward
-
-
-    def reverse(self, X, dim):
-        indices = [i for i in range(X.size(dim)-1, -1, -1)]
-        indices = torch.autograd.Variable(torch.LongTensor(indices))
-        inverted = torch.index_select(X, dim, indices)
-        return inverted
 
 
     def fit(self, X, Y, n_epoch=10, batch_size=128, en_shuffle=True):
@@ -81,6 +68,8 @@ class BiRNN(torch.nn.Module):
 
 
     def evaluate(self, X_test, Y_test, batch_size=128):
+        self.birnn.eval()
+
         correct = 0
         total = 0
         for X_batch, Y_batch in zip(self.gen_batch(X_test, batch_size), self.gen_batch(Y_test, batch_size)):

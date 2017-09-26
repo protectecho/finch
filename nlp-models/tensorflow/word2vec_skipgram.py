@@ -1,3 +1,4 @@
+from __future__ import division
 import re
 import sys
 import math
@@ -64,20 +65,19 @@ class SkipGram:
         normalized_embedding = self.embedding / norm # divided by modulus for cosine similarity
 
         sample_embedded = tf.nn.embedding_lookup(normalized_embedding, sample_indices)
-        self.similarity = tf.matmul(sample_embedded, tf.transpose(normalized_embedding))
+        self.similarity = tf.matmul(sample_embedded, normalized_embedding, transpose_b=True)
     # end method add_similarity_test
 
 
     def preprocess_text(self):
         text = self.text
-        text = text.replace('\n', ' ')
         if self.useless_words is not None:
-            if sys.version[0] == 3:
-                table = str.maketrans({useless: ' ' for useless in self.useless_words})
+            if int(sys.version[0]) >= 3:
+                table = str.maketrans({useless: '' for useless in self.useless_words})
                 text = text.translate(table)
             else:
                 text = re.sub(r'[{}]'.format(''.join(self.useless_words)), ' ', text)
-        text = re.sub('\s+', ' ', text).strip().lower()
+        text = re.sub('\s+', ' ', text.replace('\n', ' ')).strip().lower()
         
         words = text.split()
         word2freq = Counter(words)
@@ -103,7 +103,7 @@ class SkipGram:
         int_word_counts = Counter(int_words)
         total_count = len(int_words)
         
-        word_freqs = {w: float(c) / total_count for w, c in int_word_counts.items()}
+        word_freqs = {w: c / total_count for w, c in int_word_counts.items()}
         prob_drop = {w: 1 - np.sqrt(t / word_freqs[w]) for w in int_word_counts}
         train_words = [w for w in int_words if prob_drop[w] < threshold]
 
@@ -168,11 +168,11 @@ class SkipGram:
                 if local_step % eval_step == 0:
                     similarity = self.sess.run(self.similarity)
                     for i in range(len(self.sample_words)):
-                        analogies = (-similarity[i]).argsort()[1:top_k+1]
+                        neighbours = (-similarity[i]).argsort()[1:top_k+1]
                         log = 'Nearest to [%s]:' % self.idx2word[self.sample_indices[i]]
                         for k in range(top_k):
-                            analogy = self.idx2word[analogies[k]]
-                            log = '%s %s,' % (log, analogy)
+                            neighbour = self.idx2word[neighbours[k]]
+                            log = '%s %s,' % (log, neighbour)
                         print(log)
     # end method fit
 

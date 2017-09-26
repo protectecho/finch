@@ -1,11 +1,10 @@
 import tensorflow as tf
-import math
 import numpy as np
-import re
+import math
 
 
 class RNNTextGen:
-    def __init__(self, text, seq_len=50, embedding_dims=128, cell_size=512, n_layer=2, grad_clip=5., 
+    def __init__(self, text, seq_len=50, embedding_dims=128, cell_size=256, n_layer=2, grad_clip=5., 
                  sess=tf.Session()):
         """
         Parameters:
@@ -32,31 +31,28 @@ class RNNTextGen:
         self.cell_size = cell_size
         self.n_layer = n_layer
         self.grad_clip = grad_clip
-        self._cursor = None
+        self._pointer = None
         self.preprocessing()
         self.build_graph()
     # end constructor
 
 
     def build_graph(self):
-        with tf.variable_scope('main_model'):
-            self.add_input_layer()       
-            self.add_word_embedding()
-            self.add_lstm_cells()
-            self.add_dynamic_rnn()
-            self.add_output_layer()
-            self.add_backward_path()
-        with tf.variable_scope('main_model', reuse=True):
-            self.add_inference()
+        self.add_input_layer()       
+        self.add_word_embedding()
+        self.add_lstm_cells()
+        self.add_dynamic_rnn()
+        self.add_output_layer()
+        self.add_backward_path()
     # end method build_graph
 
 
     def add_input_layer(self):
-        self.X = tf.placeholder(tf.int32, [None, self.seq_len])
-        self.Y = tf.placeholder(tf.int32, [None, self.seq_len])
+        self.X = tf.placeholder(tf.int32, [None, None])
+        self.Y = tf.placeholder(tf.int32, [None, None])
         self.batch_size = tf.placeholder(tf.int32, [])
         self.lr = tf.placeholder(tf.float32) 
-        self._cursor = self.X
+        self._pointer = self.X
     # end method add_input_layer
 
 
@@ -64,27 +60,26 @@ class RNNTextGen:
         # (batch_size, seq_len) -> (batch_size, seq_len, embedding_dims)
         embedding = tf.get_variable('encoder', [self.vocab_size, self.embedding_dims], tf.float32,
                                      tf.random_uniform_initializer(-1.0, 1.0))
-        self._cursor = tf.nn.embedding_lookup(embedding, self._cursor)
+        self._pointer = tf.nn.embedding_lookup(embedding, self._pointer)
     # end method add_word_embedding
 
 
     def add_lstm_cells(self):
-        def cell():
-            cell = tf.nn.rnn_cell.LSTMCell(self.cell_size, initializer=tf.orthogonal_initializer())
-            return cell
-        self.cells = tf.nn.rnn_cell.MultiRNNCell([cell() for _ in range(self.n_layer)])
+        lstm = lambda x : tf.nn.rnn_cell.LSTMCell(x, initializer=tf.orthogonal_initializer())
+        self.cells = tf.nn.rnn_cell.MultiRNNCell([lstm(self.cell_size) for _ in range(self.n_layer)])
     # end method add_rnn_cells
 
 
     def add_dynamic_rnn(self):
         self.init_state = self.cells.zero_state(self.batch_size, tf.float32)
-        self._cursor, self.final_state = tf.nn.dynamic_rnn(self.cells, self._cursor, initial_state=self.init_state)   
+        self._pointer, self.final_state = tf.nn.dynamic_rnn(self.cells, self._pointer, initial_state=self.init_state)   
     # end method add_dynamic_rnn
 
 
     def add_output_layer(self):
-        reshaped = tf.reshape(self._cursor, [-1, self.cell_size])
-        self.logits = tf.layers.dense(reshaped, self.vocab_size, name='output')
+        reshaped = tf.reshape(self._pointer, [-1, self.cell_size])
+        self.logits = tf.layers.dense(reshaped, self.vocab_size)
+        self.softmax_out = tf.nn.softmax(self.logits)
     # end method add_output_layer
 
 
@@ -94,8 +89,7 @@ class RNNTextGen:
             targets = self.Y,
             weights = tf.ones([self.batch_size, self.seq_len]),
             average_across_timesteps = True,
-            average_across_batch = True,
-        )
+            average_across_batch = True)
         self.loss = tf.reduce_sum(losses)
         # gradient clipping
         params = tf.trainable_variables()
@@ -103,16 +97,6 @@ class RNNTextGen:
         clipped_gradients, _ = tf.clip_by_global_norm(gradients, self.grad_clip)
         self.train_op = tf.train.AdamOptimizer(self.lr).apply_gradients(zip(clipped_gradients, params))
     # end method add_backward_path
-
-
-    def add_inference(self):
-        self.x = tf.placeholder(tf.int32, [1, 1])
-        self.i_s = self.cells.zero_state(1, tf.float32)
-        x_embedded = tf.nn.embedding_lookup(tf.get_variable('encoder'), self.x)
-        y, self.f_s = tf.nn.dynamic_rnn(self.cells, x_embedded, initial_state=self.i_s)
-        y = tf.layers.dense(tf.reshape(y, [-1, self.cell_size]), self.vocab_size, name='output', reuse=True)
-        self.y = tf.nn.softmax(y)
-    # end add_sample_model
 
 
     def adjust_lr(self, current_step, total_steps):
@@ -131,7 +115,6 @@ class RNNTextGen:
         self.idx2char = {i: c for i, c in enumerate(chars)}
         self.vocab_size = len(self.idx2char)
         print('Vocabulary size:', self.vocab_size)
-
         self.indexed = np.array([self.char2idx[char] for char in list(text)])
     # end method text_preprocessing
 
@@ -144,8 +127,7 @@ class RNNTextGen:
     # end method next_batch
 
 
-    def fit(self, start_word, text_iter_step=10, n_gen=500, n_epoch=20, batch_size=128,
-            en_exp_decay=False):
+    def fit(self, start_word, text_iter_step=1, n_gen=500, n_epoch=1, batch_size=128, en_exp_decay=False):
         global_step = 0
         n_batch = (len(self.indexed) - self.seq_len*batch_size - 1) // text_iter_step
         total_steps = n_epoch * n_batch
@@ -167,31 +149,28 @@ class RNNTextGen:
                 if local_step % 100 == 0:
                     print(self.infer(start_word, n_gen)+'\n')
                 global_step += 1
-            
-        return log
     # end method fit
 
 
     def infer(self, start_word, n_gen):
         # warming up
-        next_state = self.sess.run(self.i_s)
+        next_state = self.sess.run(self.init_state, {self.batch_size: 1})
         char_list = list(start_word)
         for char in char_list[:-1]:
-            x = np.atleast_2d(self.char2idx[char]) 
-            next_state = self.sess.run(self.f_s, {self.x:x, self.i_s:next_state})
+            next_state = self.sess.run(self.final_state, {self.X: np.atleast_2d(self.char2idx[char]),
+                                                          self.init_state: next_state})
         # end warming up
 
-        out_sentence = 'IN: ' + start_word + '\nOUT: ' + start_word
+        out_sentence = 'IN:\n' + start_word + '\n\nOUT:\n' + start_word
         char = char_list[-1]
         for _ in range(n_gen):
-            x = np.atleast_2d(self.char2idx[char])
-            softmax_out, next_state = self.sess.run([self.y, self.f_s],
-                                                    {self.x:x, self.i_s:next_state})
-            probas = softmax_out[0].astype('float64')
+            softmax_out, next_state = self.sess.run([self.softmax_out, self.final_state],
+                                                    {self.X: np.atleast_2d(self.char2idx[char]),
+                                                     self.init_state: next_state})
+            probas = softmax_out[0].astype(np.float64)
             probas = probas / np.sum(probas)
             actions = np.random.multinomial(1, probas, 1)
-            idx = np.argmax(actions)
-            char = self.idx2char[idx]
+            char = self.idx2char[np.argmax(actions)]
             out_sentence = out_sentence + char
         return out_sentence
     # end method infer

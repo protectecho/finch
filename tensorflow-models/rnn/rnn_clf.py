@@ -5,14 +5,12 @@ import sklearn
 
 
 class RNNClassifier:
-    def __init__(self, n_in, n_seq, n_out, cell_size=128, n_layer=1, stateful=False, sess=tf.Session()):
+    def __init__(self, n_in, n_out, cell_size=128, n_layer=1, stateful=False, sess=tf.Session()):
         """
         Parameters:
         -----------
         n_in: int
             Input dimensions
-        n_step: int
-            Number of time steps
         cell_size: int
             Number of units in the rnn cell
         n_out: int
@@ -25,13 +23,12 @@ class RNNClassifier:
             If true, the final state for each batch will be used as the initial state for the next batch 
         """
         self.n_in = n_in
-        self.n_seq = n_seq
         self.cell_size = cell_size
         self.n_out = n_out
         self.n_layer = n_layer
         self.sess = sess
         self.stateful = stateful
-        self._cursor = None
+        self._pointer = None
         self.build_graph()
     # end constructor
 
@@ -46,36 +43,33 @@ class RNNClassifier:
 
 
     def add_input_layer(self):
-        self.X = tf.placeholder(tf.float32, [None, self.n_seq, self.n_in])
+        self.X = tf.placeholder(tf.float32, [None, None, self.n_in])
         self.Y = tf.placeholder(tf.int64, [None])
         self.batch_size = tf.placeholder(tf.int32, [])
         self.in_keep_prob = tf.placeholder(tf.float32)
         self.out_keep_prob = tf.placeholder(tf.float32)
-        self._cursor = self.X
+        self._pointer = self.X
     # end method add_input_layer
 
 
     def add_lstm_cells(self):
-        def cell():
-            cell = tf.nn.rnn_cell.LSTMCell(self.cell_size, initializer=tf.orthogonal_initializer())
-            cell = tf.nn.rnn_cell.DropoutWrapper(cell, self.in_keep_prob, self.out_keep_prob)
-            return cell
-        self.cells = tf.nn.rnn_cell.MultiRNNCell([cell() for _ in range(self.n_layer)])
+        lstm = lambda size, in_p, out_p : tf.nn.rnn_cell.DropoutWrapper(
+            tf.nn.rnn_cell.LSTMCell(size, initializer=tf.orthogonal_initializer()), in_p, out_p)
+        self.cells = tf.nn.rnn_cell.MultiRNNCell(
+            [lstm(self.cell_size, self.in_keep_prob, self.out_keep_prob) for _ in range(self.n_layer)])
     # end method add_rnn_cells
 
 
     def add_dynamic_rnn(self):      
         self.init_state = self.cells.zero_state(self.batch_size, tf.float32)        
-        self._cursor, self.final_state = tf.nn.dynamic_rnn(self.cells, self._cursor,
-                                                           initial_state=self.init_state,
-                                                           time_major=False)
+        _, self.final_state = tf.nn.dynamic_rnn(self.cells, self._pointer,
+                                                initial_state=self.init_state,
+                                                time_major=False)
     # end method add_dynamic_rnn
 
 
     def add_output_layer(self):
-        # (batch, n_step, n_hidden) -> (n_step, batch, n_hidden) -> n_step * [(batch, n_hidden)]
-        time_major = tf.unstack(tf.transpose(self._cursor, [1,0,2]))
-        self.logits = tf.layers.dense(time_major[-1], self.n_out)
+        self.logits = tf.layers.dense(self.final_state[-1].h, self.n_out)
     # end method add_output_layer
 
 
@@ -113,7 +107,7 @@ class RNNClassifier:
                                                               self.in_keep_prob:keep_prob_tuple[0],
                                                               self.out_keep_prob:keep_prob_tuple[1],
                                                               self.batch_size:len(X_batch),
-                                                              self.init_state:next_state })
+                                                              self.init_state:next_state})
                 else:             
                     _, loss, acc = self.sess.run([self.train_op, self.loss, self.acc],
                                                  {self.X:X_batch, self.Y:Y_batch, self.lr:lr,

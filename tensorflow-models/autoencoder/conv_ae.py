@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+import sklearn
 import math
 
 
@@ -9,7 +10,7 @@ class ConvAE:
         self.img_ch = img_ch
         self.kernel_size = kernel_size
         self.sess = sess
-        self._cursor = None
+        self._pointer = None
         self.build_graph()
     # end constructor
 
@@ -25,33 +26,34 @@ class ConvAE:
     def add_input_layer(self):
         self.batch_size = tf.placeholder(tf.int32)
         self.X = tf.placeholder(tf.float32, [None, self.img_size[0], self.img_size[1], self.img_ch])
-        self._cursor = self.X
+        self._pointer = self.X
     # end method add_input_layer
 
 
     def add_conv(self, name, n_filter, strides=1):
         with tf.variable_scope('weights_tied'):
             W = self.call_W(name+'_W',[self.kernel_size[0], self.kernel_size[1], self.img_ch, n_filter])
-        Y = tf.nn.conv2d(self._cursor, W, strides=[1,strides,strides,1], padding='SAME')
+        Y = tf.nn.conv2d(self._pointer, W, strides=[1,strides,strides,1], padding='SAME')
         Y = tf.nn.bias_add(Y, self.call_b(name+'_conv_b', [n_filter]))
         Y = tf.nn.relu(Y)
-        self._cursor = Y
+        self._pointer = Y
     # end method add_conv
 
 
     def add_deconv(self, name, strides=1):
         with tf.variable_scope('weights_tied', reuse=True):
             W = tf.get_variable(name+'_W')
-        Y = tf.nn.conv2d_transpose(self._cursor, W,
+        Y = tf.nn.conv2d_transpose(self._pointer, W,
                                   [self.batch_size, self.img_size[0], self.img_size[1], self.img_ch],
                                   [1,strides,strides,1], 'SAME')
         Y = tf.nn.bias_add(Y, self.call_b(name+'_deconv_b', [self.img_ch]))
-        self.decoder_op = Y
+        self.logits = Y
+        self.decoder_op = tf.sigmoid(self.logits)
     # end method add_deconv
 
 
     def add_backward_path(self):
-        self.loss = tf.reduce_mean(tf.squared_difference(self.X, self.decoder_op))
+        self.loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=self.X, logits=self.logits))
         self.train_op = tf.train.AdamOptimizer().minimize(self.loss)
     # end method add_backward_path
 
@@ -66,11 +68,13 @@ class ConvAE:
     # end method _b
 
 
-    def fit(self, X_train, val_data, n_epoch=10, batch_size=128):
+    def fit(self, X_train, val_data, n_epoch=10, batch_size=128, en_shuffle=True):
         self.sess.run(tf.global_variables_initializer()) # initialize all variables
         global_step = 0
         for epoch in range(n_epoch):
-            # batch training
+            if en_shuffle:
+                X_train = sklearn.utils.shuffle(X_train)
+                print("Data Shuffled")
             for local_step, X_batch in enumerate(self.gen_batch(X_train, batch_size)):
                 _, loss = self.sess.run([self.train_op, self.loss], {self.X:X_batch,
                                                                      self.batch_size:len(X_batch)})

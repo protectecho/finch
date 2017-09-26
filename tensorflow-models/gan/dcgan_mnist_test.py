@@ -19,12 +19,15 @@ def scaled(images):
     return ( images.astype(np.float32) - (255./2) ) / (255./2)
 
 
+def select(images, labels, num):
+    return np.expand_dims(images, 3)[labels == num]
+
+
 if __name__ == '__main__':
     (X_train, y_train), (_, _) = tf.contrib.keras.datasets.mnist.load_data()
-    X_train = scaled(X_train)
-    X = np.expand_dims(X_train, 3)[y_train == 8]
+    X = select(scaled(X_train), y_train, 8)
     
-    gan = DCGAN(G_SIZE)
+    gan = DCGAN(G_SIZE, (28, 28), 1, shape_trace=[(7, 7, 128), (14, 14, 64)])
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
     
